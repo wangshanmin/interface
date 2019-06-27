@@ -19,8 +19,8 @@ import mxnet as mx
 from mxnet import ndarray as nd
 from mxnet import io
 from mxnet import recordio
+from config import config, default, generate_config
 
-logger = logging.getLogger()
 
 
 class FaceImageIter(io.DataIter):
@@ -51,7 +51,7 @@ class FaceImageIter(io.DataIter):
               for identity in self.seq_identity:
                 s = self.imgrec.read_idx(identity)
                 header, _ = recordio.unpack(s)
-                a,b = int(header.label[0]), int(header.label[1])
+                a,b = int(header.label[0]), int(header.label[1])   ### label
                 count = b-a
                 if count<images_filter:
                   continue
@@ -66,7 +66,6 @@ class FaceImageIter(io.DataIter):
               print(len(self.seq))
             else:
               self.seq = None
-
         self.mean = mean
         self.nd_mean = None
         if self.mean:
@@ -84,11 +83,20 @@ class FaceImageIter(io.DataIter):
         self.cutoff = cutoff
         self.color_jittering = color_jittering
         self.CJA = mx.image.ColorJitterAug(0.125, 0.125, 0.125)
-        self.provide_label = [(label_name, (batch_size,))]
-        #print(self.provide_label[0][1])
+        print(label_name)
+        self.provide_label = [(label_name, (batch_size, 1 + config.emb_size))]
+        print(self.provide_label[0][1])###·[batch, 513]
         self.cur = 0
         self.nbatch = 0
         self.is_init = False
+      #  self.train_features = open('../datasets/ms1m-retinaface-t1/train_features','r').readlines()
+        #self.train_features_flip = open('../datasets/ms1m-retinaface-t1/train_features','r').readlines()
+        train_features = np.fromfile('../datasets/ms1m-retinaface-t1/train_features', dtype=np.float32)
+        self.train_features = train_features.reshape(5179510, 512)
+        train_features_flip = np.fromfile('../datasets/ms1m-retinaface-t1/train_features_flip', dtype=np.float32)
+        self.train_features_flip = train_features_flip.reshape(5179510, 512)
+        # self.train_features_flip = self.train_features
+
 
 
     def reset(self):
@@ -111,6 +119,9 @@ class FaceImageIter(io.DataIter):
             if self.cur >= len(self.seq):
                 raise StopIteration
             idx = self.seq[self.cur]
+            embed = self.train_features[self.cur]
+            embed_flip = self.train_features_flip[self.cur]
+
             self.cur += 1
             if self.imgrec is not None:
               s = self.imgrec.read_idx(idx)
@@ -118,16 +129,16 @@ class FaceImageIter(io.DataIter):
               label = header.label
               if not isinstance(label, numbers.Number):
                 label = label[0]
-              return label, img, None, None
+              return label, img, embed, embed_flip, None, None
             else:
               label, fname, bbox, landmark = self.imglist[idx]
-              return label, self.read_image(fname), bbox, landmark
+              return label, self.read_image(fname), embed, embed_flip, bbox, landmark
         else:
             s = self.imgrec.read()
             if s is None:
                 raise StopIteration
             header, img = recordio.unpack(s)
-            return header.label, img, None, None
+            return header.label, img, None, None, None, None
 
     def brightness_aug(self, src, x):
       alpha = 1.0 + random.uniform(-x, x)
@@ -177,7 +188,7 @@ class FaceImageIter(io.DataIter):
       img.save(buf, format='JPEG', quality=q)
       buf = buf.getvalue()
       img = Image.open(BytesIO(buf))
-      return nd.array(np.asarray(img, 'float32'))
+      return nd.array(np.asarray(img, 'floanvidt32'))
 
 
     def next(self):
@@ -191,18 +202,20 @@ class FaceImageIter(io.DataIter):
         c, h, w = self.data_shape
         batch_data = nd.empty((batch_size, c, h, w))
         if self.provide_label is not None:
-          batch_label = nd.empty(self.provide_label[0][1])
+          batch_label = nd.empty(self.provide_label[0][1])##[batch, 513]
         i = 0
         try:
             while i < batch_size:
-                label, s, bbox, landmark = self.next_sample()
+                label, s, embed, embed_flip, bbox, landmark = self.next_sample()
                 _data = self.imdecode(s)
+                embed_ = nd.array(embed)
                 if _data.shape[0]!=self.data_shape[1]:
                   _data = mx.image.resize_short(_data, self.data_shape[1])
                 if self.rand_mirror:
                   _rd = random.randint(0,1)
                   if _rd==1:
                     _data = mx.ndarray.flip(data=_data, axis=1)
+                    embed_ = nd.array(embed_flip)
                 if self.color_jittering>0:
                   if self.color_jittering>1:
                     _rd = random.randint(0,1)
@@ -242,13 +255,17 @@ class FaceImageIter(io.DataIter):
                     assert i < batch_size, 'Batch size must be multiples of augmenter output length'
                     #print(datum.shape)
                     batch_data[i][:] = self.postprocess_data(datum)
-                    batch_label[i][:] = label
+                    batch_label[i][0] = label
+                    embed_norm  = mx.nd.reshape(mx.nd.L2Normalization(embed_) * config.loss_s, (config.emb_size))
+                    # print(embed_norm.shape)
+                    # print(embed_.shape)
+                    batch_label[i][1:] = embed_norm
                     i += 1
         except StopIteration:
             if i<batch_size:
                 raise StopIteration
 
-        return io.DataBatch([batch_data], [batch_label], batch_size - i)
+        return io.DataBatch([batch_data], [batch_label],batch_size - i)
 
     def check_data_shape(self, data_shape):
         """Checks if the input data shape is valid"""

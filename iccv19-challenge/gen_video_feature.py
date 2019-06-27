@@ -32,7 +32,7 @@ ctx_num = 0
 
 
 def do_flip(data):
-  for idx in xrange(data.shape[0]):
+  for idx in range(data.shape[0]):
     data[idx,:,:] = np.fliplr(data[idx,:,:])
 
 def get_feature(buffer):
@@ -47,6 +47,7 @@ def get_feature(buffer):
   input_blob = np.zeros( (network_count, 3, image_shape[1], image_shape[2]), dtype=np.float32)
   idx = 0
   for item in buffer:
+#    print(item)
     img = cv2.imread(item)[:,:,::-1] #to rgb
     img = np.transpose( img, (2,0,1) )
     attempts = [0,1] if use_flip else [0]
@@ -87,9 +88,10 @@ def main(args):
 
   print(args)
   ctx = []
-  cvd = os.environ['CUDA_VISIBLE_DEVICES'].strip()
+#  cvd = os.environ['CUDA_VISIBLE_DEVICES'].strip()
+  cvd = '0,1,2,3'
   if len(cvd)>0:
-    for i in xrange(len(cvd.split(','))):
+    for i in range(len(cvd.split(','))):
       ctx.append(mx.gpu(i))
   if len(ctx)==0:
     ctx = [mx.cpu()]
@@ -116,7 +118,7 @@ def main(args):
   features_all = None
 
   i = 0
-  filelist = os.path.join(args.input, 'filelist.txt')
+  filelist = os.path.join(args.input, 'video_filelist.txt')
   #print(filelist)
   buffer_images = []
   buffer_embedding = np.zeros( (0,0), dtype=np.float32)
@@ -129,6 +131,8 @@ def main(args):
     #print('stat', i, len(buffer_images), buffer_embedding.shape, aggr_nums, row_idx)
     videoname = line.strip().split()[0]
     images = glob.glob("%s/%s/*.jpg"%(args.input, videoname))
+#    print(videoname)
+#    print(len(images))
     assert len(images)>0
     image_features = []
     for image_path in images:
@@ -193,9 +197,9 @@ def parse_arguments(argv):
   
   parser.add_argument('--batch_size', type=int, help='', default=32)
   parser.add_argument('--image_size', type=str, help='', default='3,112,112')
-  parser.add_argument('--input', type=str, help='', default='./testdata-video')
-  parser.add_argument('--output', type=str, help='', default='')
-  parser.add_argument('--model', type=str, help='', default='')
+  parser.add_argument('--input', type=str, help='', default='/home/wangshanmin/insightface/datasets/iQIYI-VID-FACE/')
+  parser.add_argument('--output', type=str, help='', default='/home/wangshanmin/insightface/datasets/output_video.bin')
+  parser.add_argument('--model', type=str, help='', default='/home/wangshanmin/insightface/recognition/model/y2-arcface-retina/model, 001')
   return parser.parse_args(argv)
 
 if __name__ == '__main__':

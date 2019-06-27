@@ -30,7 +30,7 @@ use_flip = True
 
 
 def do_flip(data):
-  for idx in xrange(data.shape[0]):
+  for idx in range(data.shape[0]):
     data[idx,:,:] = np.fliplr(data[idx,:,:])
 
 def get_feature(buffer):
@@ -53,6 +53,8 @@ def get_feature(buffer):
   data = mx.nd.array(input_blob)
   db = mx.io.DataBatch(data=(data,))
   net.model.forward(db, is_train=False)
+  embedding = net.model.get_outputs()[0]
+#  print(embedding.shape)
   _embedding = net.model.get_outputs()[0].asnumpy()
   if emb_size==0:
     emb_size = _embedding.shape[1]
@@ -81,9 +83,10 @@ def main(args):
 
   print(args)
   ctx = []
-  cvd = os.environ['CUDA_VISIBLE_DEVICES'].strip()
+#  cvd = os.environ['CUDA_VISIBLE_DEVICES'].strip()
+  cvd = '0'  
   if len(cvd)>0:
-    for i in xrange(len(cvd.split(','))):
+    for i in range(len(cvd.split(','))):
       ctx.append(mx.gpu(i))
   if len(ctx)==0:
     ctx = [mx.cpu()]
@@ -111,7 +114,7 @@ def main(args):
   i = 0
   fstart = 0
   buffer = []
-  for line in open(os.path.join(args.input, 'filelist.txt'), 'r'):
+  for line in open(os.path.join(args.input, 'try.txt'), 'r'):
     if i%1000==0:
       print("processing ",i)
     i+=1
@@ -142,9 +145,9 @@ def parse_arguments(argv):
   
   parser.add_argument('--batch_size', type=int, help='', default=32)
   parser.add_argument('--image_size', type=str, help='', default='3,112,112')
-  parser.add_argument('--input', type=str, help='', default='')
-  parser.add_argument('--output', type=str, help='', default='')
-  parser.add_argument('--model', type=str, help='', default='')
+  parser.add_argument('--input', type=str, help='', default='/home/wangshanmin/academy/insightface/datasets/iccv19-challenge-data/')
+  parser.add_argument('--output', type=str, help='', default='/home/wangshanmin/academy/insightface/datasets/output_model_2.bin')
+  parser.add_argument('--model', type=str, help='', default='/home/wangshanmin/academy/insightface/recognition/model/y2-arcface-retina/model,1')
   return parser.parse_args(argv)
 
 if __name__ == '__main__':

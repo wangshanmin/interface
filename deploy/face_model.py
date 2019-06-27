@@ -44,6 +44,7 @@ class FaceModel:
   def __init__(self, args):
     self.args = args
     ctx = mx.gpu(args.gpu)
+   # ctx = mx.cpu(args.gpu)
     _vec = args.image_size.split(',')
     assert len(_vec)==2
     image_size = (int(_vec[0]), int(_vec[1]))
@@ -74,14 +75,19 @@ class FaceModel:
     bbox, points = ret
     if bbox.shape[0]==0:
       return None
-    bbox = bbox[0,0:4]
-    points = points[0,:].reshape((2,5)).T
+    aligned_total = np.zeros(shape = (len(bbox), 3,112, 112))
+    for i in range(len(bbox)):
+      box = bbox[i,0:4]
+      point = points[i,:].reshape((2,5)).T
     #print(bbox)
     #print(points)
-    nimg = face_preprocess.preprocess(face_img, bbox, points, image_size='112,112')
-    nimg = cv2.cvtColor(nimg, cv2.COLOR_BGR2RGB)
-    aligned = np.transpose(nimg, (2,0,1))
-    return aligned
+      nimg = face_preprocess.preprocess(face_img, box, point, image_size='112,112')
+#      cv2.imshow('nimg',nimg)
+#      cv2.waitKey(0)
+#      cv2.destroyAllWindows()
+      nimg = cv2.cvtColor(nimg, cv2.COLOR_BGR2RGB)
+      aligned_total[i] = np.transpose(nimg, (2,0,1))
+    return aligned_total, bbox
 
   def get_feature(self, aligned):
     input_blob = np.expand_dims(aligned, axis=0)
@@ -89,7 +95,7 @@ class FaceModel:
     db = mx.io.DataBatch(data=(data,))
     self.model.forward(db, is_train=False)
     embedding = self.model.get_outputs()[0].asnumpy()
-    embedding = sklearn.preprocessing.normalize(embedding).flatten()
+    embedding = sklearn.preprocessing.normalize(embedding).flatten()###512
     return embedding
 
   def get_ga(self, aligned):

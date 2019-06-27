@@ -171,7 +171,7 @@ def parse_arguments(argv):
   parser.add_argument('--facescrub-root', type=str, help='', default='./data/facescrub_images')
   parser.add_argument('--megaface-root', type=str, help='', default='./data/megaface_images')
   parser.add_argument('--output', type=str, help='', default='./feature_out')
-  parser.add_argument('--model', type=str, help='', default='')
+  parser.add_argument('--model', type=str, help='', default='/home/wangshanmin/insightface/models/model,00')
   return parser.parse_args(argv)
 
 if __name__ == '__main__':

@@ -62,36 +62,38 @@ def calculate_roc(thresholds, embeddings1, embeddings2, actual_issame, nrof_fold
     assert(embeddings1.shape[1] == embeddings2.shape[1])
     nrof_pairs = min(len(actual_issame), embeddings1.shape[0])
     nrof_thresholds = len(thresholds)
-    k_fold = LFold(n_splits=nrof_folds, shuffle=False)
-    
+    k_fold = LFold(n_splits=nrof_folds, shuffle=False)###K fold crossdata validation
     tprs = np.zeros((nrof_folds,nrof_thresholds))
+#    print(tprs.shape)  ####(10, 400)
     fprs = np.zeros((nrof_folds,nrof_thresholds))
     accuracy = np.zeros((nrof_folds))
-    indices = np.arange(nrof_pairs)
+    indices = np.arange(nrof_pairs)####1,2,....6000
     #print('pca', pca)
     
     if pca==0:
       diff = np.subtract(embeddings1, embeddings2)
       dist = np.sum(np.square(diff),1)
+      print(dist.shape)
     
     for fold_idx, (train_set, test_set) in enumerate(k_fold.split(indices)):
-        #print('train_set', train_set)
-        #print('test_set', test_set)
+     #   print('train_set', train_set)######600-6000
+    #    print('test_set', test_set)###########1-600
         if pca>0:
           print('doing pca on', fold_idx)
           embed1_train = embeddings1[train_set]
           embed2_train = embeddings2[train_set]
           _embed_train = np.concatenate( (embed1_train, embed2_train), axis=0 )
-          #print(_embed_train.shape)
+#          print(_embed_train.shape)
           pca_model = PCA(n_components=pca)
           pca_model.fit(_embed_train)
           embed1 = pca_model.transform(embeddings1)
           embed2 = pca_model.transform(embeddings2)
           embed1 = sklearn.preprocessing.normalize(embed1)
           embed2 = sklearn.preprocessing.normalize(embed2)
-          #print(embed1.shape, embed2.shape)
+#          print(embed1.shape, embed2.shape)
           diff = np.subtract(embed1, embed2)
           dist = np.sum(np.square(diff),1)
+#          print(dist.shape)
         
         # Find the best threshold for the fold
         acc_train = np.zeros((nrof_thresholds))
@@ -108,7 +110,7 @@ def calculate_roc(thresholds, embeddings1, embeddings2, actual_issame, nrof_fold
     return tpr, fpr, accuracy
 
 def calculate_accuracy(threshold, dist, actual_issame):
-    predict_issame = np.less(dist, threshold)
+    predict_issame = np.less(dist, threshold)  ###True or False
     tp = np.sum(np.logical_and(predict_issame, actual_issame))
     fp = np.sum(np.logical_and(predict_issame, np.logical_not(actual_issame)))
     tn = np.sum(np.logical_and(np.logical_not(predict_issame), np.logical_not(actual_issame)))
@@ -170,8 +172,10 @@ def calculate_val_far(threshold, dist, actual_issame):
 def evaluate(embeddings, actual_issame, nrof_folds=10, pca = 0):
     # Calculate evaluation metrics
     thresholds = np.arange(0, 4, 0.01)
-    embeddings1 = embeddings[0::2]
-    embeddings2 = embeddings[1::2]
+    embeddings1 = embeddings[0::2]####remove 2,4,6...row
+#    print(embeddings1.shape)   ####[6000,512]
+    embeddings2 = embeddings[1::2]###remove 1,3,5...row
+#    print(embeddings2.shape)  ####[6000,512]
     tpr, fpr, accuracy = calculate_roc(thresholds, embeddings1, embeddings2,
         np.asarray(actual_issame), nrof_folds=nrof_folds, pca = pca)
     thresholds = np.arange(0, 4, 0.001)
@@ -180,12 +184,12 @@ def evaluate(embeddings, actual_issame, nrof_folds=10, pca = 0):
     return tpr, fpr, accuracy, val, val_std, far
 
 def load_bin(path, image_size):
-  bins, issame_list = pickle.load(open(path, 'rb'))
+  bins, issame_list = pickle.load(open(path, 'rb'), encoding='bytes')
   data_list = []
   for flip in [0,1]:
     data = nd.empty((len(issame_list)*2, 3, image_size[0], image_size[1]))
     data_list.append(data)
-  for i in xrange(len(issame_list)*2):
+  for i in range(len(issame_list)*2):
     _bin = bins[i]
     img = mx.image.imdecode(_bin)
     if img.shape[1]!=image_size[0]:
@@ -197,13 +201,15 @@ def load_bin(path, image_size):
       data_list[flip][i][:] = img
     if i%1000==0:
       print('loading bin', i)
-  print(data_list[0].shape)
+  print(data_list[0].shape)###(12000,3,112, 112)
+#  print(len(issame_list))   #####60000
   return (data_list, issame_list)
 
 def test(data_set, mx_model, batch_size, nfolds=10, data_extra = None, label_shape = None):
   print('testing verification..')
-  data_list = data_set[0]
-  issame_list = data_set[1]
+  data_list = data_set[0]############row image list and flip image list
+  issame_list = data_set[1]###################
+  
   model = mx_model
   embeddings_list = []
   if data_extra is not None:
@@ -213,15 +219,14 @@ def test(data_set, mx_model, batch_size, nfolds=10, data_extra = None, label_sha
     _label = nd.ones( (batch_size,) )
   else:
     _label = nd.ones( label_shape )
-  for i in xrange( len(data_list) ):
-    data = data_list[i]
+  for i in range( len(data_list) ):  ### each image
+    data = data_list[i]   ####[12000, 3, 112, 112]
     embeddings = None
     ba = 0
     while ba<data.shape[0]:
       bb = min(ba+batch_size, data.shape[0])
       count = bb-ba
-      _data = nd.slice_axis(data, axis=0, begin=bb-batch_size, end=bb)
-      #print(_data.shape, _label.shape)
+      _data = nd.slice_axis(data, axis=0, begin=bb-batch_size, end=bb)###(4,3,112,112)
       time0 = datetime.datetime.now()
       if data_extra is None:
         db = mx.io.DataBatch(data=(_data,), label=(_label,))
@@ -241,30 +246,29 @@ def test(data_set, mx_model, batch_size, nfolds=10, data_extra = None, label_sha
       #exe = sym.bind(_ctx, _arg ,args_grad=None, grad_req="null", aux_states=_aux)
       #exe.forward(is_train=False)
       #net_out = exe.outputs
-      _embeddings = net_out[0].asnumpy()
+      _embeddings = net_out[0].asnumpy()###(batch, 512)
       time_now = datetime.datetime.now()
       diff = time_now - time0
       time_consumed+=diff.total_seconds()
       #print(_embeddings.shape)
       if embeddings is None:
-        embeddings = np.zeros( (data.shape[0], _embeddings.shape[1]) )
+        embeddings = np.zeros((data.shape[0], _embeddings.shape[1]) )###(12000, 512)
       embeddings[ba:bb,:] = _embeddings[(batch_size-count):,:]
       ba = bb
     embeddings_list.append(embeddings)
 
   _xnorm = 0.0
   _xnorm_cnt = 0
-  for embed in embeddings_list:
-    for i in xrange(embed.shape[0]):
-      _em = embed[i]
-      _norm=np.linalg.norm(_em)
-      #print(_em.shape, _norm)
+  for embed in embeddings_list:  #### each dataset
+    for i in range(embed.shape[0]):
+      _em = embed[i]                    ####each sample 512 feature
+      _norm=np.linalg.norm(_em)          ###### l2 norm
       _xnorm+=_norm
       _xnorm_cnt+=1
   _xnorm /= _xnorm_cnt
 
   embeddings = embeddings_list[0].copy()
-  embeddings = sklearn.preprocessing.normalize(embeddings)
+  embeddings = sklearn.preprocessing.normalize(embeddings)   #####
   acc1 = 0.0
   std1 = 0.0
   #_, _, accuracy, val, val_std, far = evaluate(embeddings, issame_list, nrof_folds=10)
@@ -272,9 +276,8 @@ def test(data_set, mx_model, batch_size, nfolds=10, data_extra = None, label_sha
 
   #print('Validation rate: %2.5f+-%2.5f @ FAR=%2.5f' % (val, val_std, far))
   #embeddings = np.concatenate(embeddings_list, axis=1)
-  embeddings = embeddings_list[0] + embeddings_list[1]
+  embeddings = embeddings_list[0] + embeddings_list[1]  ###(12000, 512)
   embeddings = sklearn.preprocessing.normalize(embeddings)
-  print(embeddings.shape)
   print('infer time', time_consumed)
   _, _, accuracy, val, val_std, far = evaluate(embeddings, issame_list, nrof_folds=nfolds)
   acc2, std2 = np.mean(accuracy), np.std(accuracy)
@@ -293,7 +296,7 @@ def test_badcase(data_set, mx_model, batch_size, name='', data_extra = None, lab
     _label = nd.ones( (batch_size,) )
   else:
     _label = nd.ones( label_shape )
-  for i in xrange( len(data_list) ):
+  for i in range( len(data_list) ):
     data = data_list[i]
     embeddings = None
     ba = 0
@@ -438,7 +441,7 @@ def test_badcase(data_set, mx_model, batch_size, name='', data_extra = None, lab
         #  imgb = cv2.transpose(imgb)
         #  imgb = cv2.flip(imgb, 0)
         #else:
-        #  for ii in xrange(2):
+        #  for ii in range(2):
         #    imgb = cv2.transpose(imgb)
         #    imgb = cv2.flip(imgb, 1)
       dist = out[2]
@@ -469,7 +472,7 @@ def dumpR(data_set, mx_model, batch_size, name='', data_extra = None, label_shap
     _label = nd.ones( (batch_size,) )
   else:
     _label = nd.ones( label_shape )
-  for i in xrange( len(data_list) ):
+  for i in range( len(data_list) ):
     data = data_list[i]
     embeddings = None
     ba = 0
@@ -505,16 +508,16 @@ if __name__ == '__main__':
 
   parser = argparse.ArgumentParser(description='do verification')
   # general
-  parser.add_argument('--data-dir', default='', help='')
-  parser.add_argument('--model', default='../model/softmax,50', help='path to load model.')
-  parser.add_argument('--target', default='lfw,cfp_ff,cfp_fp,agedb_30', help='test targets.')
+  parser.add_argument('--data-dir', default='/home/wangshanmin/insightface/recognition/faces_glintasia', help='')
+  parser.add_argument('--model', default='/home/wangshanmin/insightface/models/model,0', help='path to load model.')
+  parser.add_argument('--target', default='lfw', help='test targets.')###,cfp_ff,cfp_fp,agedb_30
   parser.add_argument('--gpu', default=0, type=int, help='gpu id')
-  parser.add_argument('--batch-size', default=32, type=int, help='')
+  parser.add_argument('--batch-size', default=4, type=int, help='')
   parser.add_argument('--max', default='', type=str, help='')
   parser.add_argument('--mode', default=0, type=int, help='')
   parser.add_argument('--nfolds', default=10, type=int, help='')
   args = parser.parse_args()
-  sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'common'))
+  sys.path.append('/home/wangshanmin/insightface/src/common')
   import face_image
 
   prop = face_image.load_property(args.data_dir)
@@ -566,12 +569,11 @@ if __name__ == '__main__':
     path = os.path.join(args.data_dir,name+".bin")
     if os.path.exists(path):
       print('loading.. ', name)
-      data_set = load_bin(path, image_size)
+      data_set = load_bin(path, image_size)####[data_list, issame_list]
       ver_list.append(data_set)
       ver_name_list.append(name)
-
   if args.mode==0:
-    for i in xrange(len(ver_list)):
+    for i in range(len(ver_list)):
       results = []
       for model in nets:
         acc1, std1, acc2, std2, xnorm, embeddings_list = test(ver_list[i], model, args.batch_size, args.nfolds)
