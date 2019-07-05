@@ -92,9 +92,9 @@ class FaceImageIter(io.DataIter):
       #  self.train_features = open('../datasets/ms1m-retinaface-t1/train_features','r').readlines()
         #self.train_features_flip = open('../datasets/ms1m-retinaface-t1/train_features','r').readlines()
         train_features = np.fromfile('../datasets/ms1m-retinaface-t1/train_features', dtype=np.float32)
-        self.train_features = train_features.reshape(5179510, 512)
+        self.train_features = train_features.reshape(5179510, config.emb_size)
         train_features_flip = np.fromfile('../datasets/ms1m-retinaface-t1/train_features_flip', dtype=np.float32)
-        self.train_features_flip = train_features_flip.reshape(5179510, 512)
+        self.train_features_flip = train_features_flip.reshape(5179510, config.emb_size)
         # self.train_features_flip = self.train_features
 
 

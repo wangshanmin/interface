@@ -70,7 +70,7 @@ def inter_class(weight, gt_label):
 
 def get_symbol(args):
   embedding = eval(config.net_name).get_symbol()  ###import fresnet  and get convolutional features  512 D
-  all_label = mx.symbol.Variable('softmax_label')###（batch, 513）
+  all_label = mx.symbol.Variable('softmax_label')
   gt_label = mx.sym.slice_axis(all_label, axis = 1, begin=0, end = 1)
   gt_label = mx.sym.reshape(gt_label,(args.per_batch_size))
   embed_label = mx.sym.slice_axis(all_label, axis = 1, begin = 1, end = 1 + config.emb_size )
@@ -152,13 +152,13 @@ def get_symbol(args):
         body = mx.symbol.SoftmaxActivation(data=fc7)
         body = mx.symbol.log(body)  ##return elementwise log value
         _label = mx.sym.one_hot(gt_label, depth=config.num_classes, on_value=-1.0, off_value=0.0)
-        # _, output_shape,_ = _label.infer_shape(softmax_label = (config.batch_size, config.emb_size+1))
+#        _, output_shape,_ = _label.infer_shape(softmax_label = (config.batch_size, config.emb_size+1))
         # print(output_shape)
         body = body * _label
         body = mx.symbol.sum(body) / args.per_batch_size
-
+     #   embed_loss = embed_loss / args.per_batch_size
         #      out_list.append(mx.symbol.BlockGrad(dis_w))  ### stop gradient computation  add softmax loss
-        out_list.append(mx.symbol.BlockGrad(body + embed_loss))  ### stop gradient computation  add softmax loss
+        out_list.append(mx.symbol.BlockGrad(body +  0.4*embed_loss))  ### stop gradient computation  add softmax loss
   else:
     out_list.append(mx.sym.BlockGrad(gt_label))
     out_list.append(triplet_loss)
@@ -168,7 +168,7 @@ def get_symbol(args):
 def train_net(args):
     ctx = []
 #    cvd = os.environ['CUDA_VISIBLE_DEVICES'].strip()
-    cvd = '0'
+    cvd = '0,1,2,3'
     if len(cvd)>0:
       for i in range(len(cvd.split(','))):
         ctx.append(mx.gpu(i))
@@ -183,7 +183,7 @@ def train_net(args):
     if not os.path.exists(prefix_dir):
       os.makedirs(prefix_dir)
     args.ctx_num = len(ctx)
-    args.batch_size = args.per_batch_size * args.ctx_num
+    args.batch_size = args.per_batch_size*args.ctx_num
     args.rescale_threshold = 0
     args.image_channel = config.image_shape[2]####[112,112,3]
     config.batch_size = args.batch_size
@@ -289,15 +289,15 @@ def train_net(args):
         ver_name_list.append(name)
         print('ver', name)
 
-    def ver_test(nbatch):
-      results = []
-      for i in range(len(ver_list)):
-        acc1, std1, acc2, std2, xnorm, embeddings_list = verification.test(ver_list[i], model, args.batch_size, 10, None, None)
-        print('[%s][%d]XNorm: %f' % (ver_name_list[i], nbatch, xnorm))
-        #print('[%s][%d]Accuracy: %1.5f+-%1.5f' % (ver_name_list[i], nbatch, acc1, std1))
-        print('[%s][%d]Accuracy-Flip: %1.5f+-%1.5f' % (ver_name_list[i], nbatch, acc2, std2))
-        results.append(acc2)
-      return results
+#    def ver_test(nbatch):
+#      results = []
+#      for i in range(len(ver_list)):
+#        acc1, std1, acc2, std2, xnorm, embeddings_list = verification.test(ver_list[i], model, args.batch_size, 10, None, None)
+#        print('[%s][%d]XNorm: %f' % (ver_name_list[i], nbatch, xnorm))
+#        #print('[%s][%d]Accuracy: %1.5f+-%1.5f' % (ver_name_list[i], nbatch, acc1, std1))
+#        print('[%s][%d]Accuracy-Flip: %1.5f+-%1.5f' % (ver_name_list[i], nbatch, acc2, std2))
+#        results.append(acc2)
+#      return results
 
 
 
@@ -323,26 +323,26 @@ def train_net(args):
         print('lr-batch-epoch:',opt.lr,param.nbatch, param.epoch)
 
       if mbatch>=0 and mbatch%args.verbose==0:   ###2000 test accuracy
-        acc_list = ver_test(mbatch)
+#        acc_list = ver_test(mbatch)
         save_step[0]+=1
         msave = save_step[0]
         do_save = False
-        is_highest = False
-        if len(acc_list)>0:
+        is_highest =True
+#        if len(acc_list)>0:
           #lfw_score = acc_list[0]
           #if lfw_score>highest_acc[0]:
           #  highest_acc[0] = lfw_score
           #  if lfw_score>=0.998:
           #    do_save = True
-          score = sum(acc_list)
-          if acc_list[-1]>=highest_acc[-1]:
-            if acc_list[-1]>highest_acc[-1]:
-              is_highest = Tru
-            else:
-              if score>=highest_acc[0]:
-                is_highest = True
-                highest_acc[0] = score
-            highest_acc[-1] = acc_list[-1]
+#          score = sum(acc_list)
+#          if acc_list[-1]>=highest_acc[-1]:
+#            if acc_list[-1]>highest_acc[-1]:
+#              is_highest = Tru
+#            else:
+#              if score>=highest_acc[0]:
+#                is_highest = True
+#                highest_acc[0] = score
+#            highest_acc[-1] = acc_list[-1]
             #if lfw_score>=0.99:
             #  do_save = True
         if is_highest:
@@ -367,7 +367,7 @@ def train_net(args):
             mx.model.save_checkpoint(prefix, msave, _sym, _arg, aux)
           else:
             mx.model.save_checkpoint(prefix, msave, model.symbol, arg, aux)
-        print('[%d]Accuracy-Highest: %1.5f'%(mbatch, highest_acc[-1]))
+#        print('[%d]Accuracy-Highest: %1.5f'%(mbatch, highest_acc[-1]))
       if config.max_steps>0 and mbatch>config.max_steps:
         sys.exit(0)
 
