@@ -11,17 +11,19 @@ sys.path.append('../deploy')
 import wx
 import cv2
 import argparse
-import face_model
+import retinaface_model
 from utils import load_image
 import random
 import numpy as np
+import threading
 import _thread
 import os
 from PIL import Image, ImageDraw, ImageFont
 import sklearn
-
+from wx.lib.pubsub import pub
+import time
 class interface(wx.Frame):
-    def __init__(self,parent, id, model):
+    def __init__(self,parent, id):
         wx.Frame.__init__(self,parent = None, id = -1, title = '人脸识别系统',size = (1280, 960))
         self.interface_img = 'interface.jpeg'
         self.path = 'img_save/'
@@ -32,7 +34,6 @@ class interface(wx.Frame):
         self.interface_pos = (90,100)
         self.id_file = 'id_file.txt'
         self.id_embedding = 'id_embedding.txt'
-        self.model =  model
         self.colour = (148, 175, 255)
         self.InitUI()
 
@@ -68,7 +69,13 @@ class interface(wx.Frame):
         sizer.Add(self.window_split_right, 1, flag=wx.EXPAND)  # 自动缩放
         self.SetSizer(sizer)
 
+        self.set_button()
+
+
+    def set_button(self):
+
         # 打开界面显示封面图像
+
         image = cv2.imread(self.interface_img)
         image = cv2.resize(image, self.interface_size)
         cv2.imwrite(self.interface_img, image)
@@ -88,10 +95,14 @@ class interface(wx.Frame):
         self.recognition_Button.SetBackgroundColour(self.colour)
         self.Bind(wx.EVT_BUTTON, self.rt_recognition, self.recognition_Button)
 
+        self.image_button = wx.StaticBitmap(self.middle, pos=self.interface_pos)
+
+        pub.subscribe(self.show_rt_image, "Rt-recognition")   ##### 接受来自实时识别子线程的消息   接收子线程传递的图片并显示在桌面上
+
     ####注册界面
     def register(self, event):
         ####弹出界面
-        #      frame_register = login(None, -1, self.model)
+        #      frame_register = login(None, -1, model)
         #      frame_register.row_register()
         #      frame_register.Center()
         #      frame_register.Show(True)
@@ -124,173 +135,275 @@ class interface(wx.Frame):
         self.select_Button = wx.Button(self.middle, -1, u'从文件夹选择', pos=(350, 780), size=(100, 30))
         self.select_Button.SetForegroundColour('white')
         self.select_Button.SetBackgroundColour(self.colour)
-        self.Bind(wx.EVT_BUTTON, self.select_Button, self.select_Button)
+        self.Bind(wx.EVT_BUTTON, self.select, self.select_Button)
 
-    def takephoto(self, event):
-        _thread.start_new_thread(self.takePhoto, (event,))
+        # self.image_button = wx.StaticBitmap(self.middle , pos = self.interface_pos)
+        pub.subscribe(self.show_image, "update")     #####接受拍照采集照片子线程的消息, 接受子线程传递的图片，并显示在桌面上
 
-    def takePhoto(self):
-        cap = cv2.VideoCapture(0)
+
+
+    def show_image(self, msg):   #####UI 线程将采集到的图片显示在界面上
+
+        if msg is not None:
+            self.img_captured = cv2.cvtColor(msg, cv2.COLOR_BGR2RGB)
+            self.img_captured = cv2.resize(self.img_captured, (640, 640))
+            image = cv2.resize(self.img_captured, (self.interface_size))
+            h, w, c  = image.shape
+            pic = wx.Bitmap.FromBuffer(w, h, image)
+            self.image_button.SetBitmap(pic)
+
+
+
+
+    def takephoto(self, event):   ###拍照按钮出发的事件， 采用多线程的方式，子线程采集图片，线程显示在界面上：
+        #####1 界面上增加确定和取消按钮  2 重载一个线程类，重构run函数 3 开启线程
         try:
-            self.accountLabel.Destroy()
+            self.remindLabel.Destroy()
         except:
             print()
-        while (True):
-            flag, im_rd = cap.read()
-            cv2.imshow('img', im_rd)
-            #####
-            ####
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-        cap.release()
-        cv2.destroyAllWindows()
-        self.save_id(im_rd)
 
-    def save_id(self, image_row):
-        h, w, c = image_row.shape
-        image = cv2.resize(image_row, (112, 112))
-        account = self.accountInput.GetValue()
-        #        assert(account == None)
+
+        self.photo_sure = wx.Button(self.middle, -1, u'确  定', pos=(120, 600), size=(100, 30))
+        self.photo_sure.SetForegroundColour('white')
+        self.photo_sure.SetBackgroundColour(self.colour)
+        self.Bind(wx.EVT_BUTTON, self.sure_photo, self.photo_sure)
+
+
+        self.photo_cancel = wx.Button(self.middle, -1, u'取  消', pos=(580, 600), size=(100, 30))
+        self.photo_cancel.SetForegroundColour('white')
+        self.photo_cancel.SetBackgroundColour(self.colour)
+        self.Bind(wx.EVT_BUTTON, self.cancel_photo, self.photo_cancel)
+
+
+        self.thread = TestThread()
+        self.thread.start()
+
+
+
+    def sure_photo(self, event):###拍照是确定按钮触发事件
+
         font = wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.BOLD, True)
-        self.path_id = os.path.join(self.path, account)
-        if not os.path.exists(self.path_id):
-            os.makedirs(self.path_id)
-        file = os.listdir(self.path_id)
-        count = len(file) + 1
-        self.save_name = self.path_id + '/' + str(count) + '.jpeg'
+        h_row, w_row = self.img_captured.shape[:2]
+        image = cv2.resize(self.img_captured, self.interface_size)
+        w, h = self.interface_size[0], self.interface_size[1]
+
+        aligned_face, bbox = None, None
+        self.bbox, self.aligned_face = model.get_input(self.img_captured)
+        if len(self.bbox) > 0:
+            for i in range(len(self.bbox)):
+                box = self.bbox[i]
+                cv2.rectangle(image, (int(box[0] * w / w_row), int(box[1] * h / h_row)),
+                                  (int(box[2] * w / w_row), int(box[3] * h / h_row)), (55, 255, 155), 2)
+        else:
+            self.remindLabel = wx.StaticText(self.middle, -1, u'没有检测到人脸', pos=(450, 700), size=(100, 100))
+            self.remindLabel.SetFont(font)
+
+        wxbmp = wx.BitmapFromBuffer(w, h, image)
+        self.image_button.SetBitmap(wxbmp)
+
+
+
+        self.photo_cancel.Destroy()
+        self.photo_sure.Destroy()
+        wx.CallAfter(pub.sendMessage, 'sure')
+        self.thread.stop()
+
+
+
+    def cancel_photo(self, event):#####拍照取消按钮触发事件
+        #### 1 向子线程发消息关闭摄像头  2 回复初始界面图片  3 关闭子线程   4 清除界面
+
+        interface_img = wx.Image(load_image(self.interface_img), wx.BITMAP_TYPE_ANY).ConvertToBitmap()
+
+        self.image_button.SetBitmap(interface_img)
+
+        self.photo_sure.Destroy()
+        self.photo_cancel.Destroy()
         try:
-            aligned, bbox = self.model.get_input(image)
+            self.remindLabel.Destroy()
+        except:
+            print()
 
-            if len(bbox) > 1:  ###检测到多个人脸
-                self.accountLabel = wx.StaticText(self.middle, -1, u'检测到多个人脸', pos=(480, 780), size=(100, 100))
-                self.accountLabel.SetForegroundColour(self.themeColor)
-                self.accountLabel.SetFont(font)
-            else:  ###检测到一个人脸
-                self.img = aligned[0]
-                box = bbox[0]
-                cv2.rectangle(image_row, (int(box[0] * w / 112), int(box[1] * h / 112)),
-                              (int(box[2] * w / 112), int(box[3] * h / 112)), (55, 255, 155), 2)
+        wx.CallAfter(pub.sendMessage,'cancel')
+        self.thread.stop()
 
-                image = cv2.resize(image_row, self.interface_size)
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                cv2.imwrite(self.save_name, image)
-                wxbmp = wx.BitmapFromBuffer(self.interface_size[0], self.interface_size[1], image)
-                wx.BitmapButton(self.middle, -1, wxbmp, pos=self.interface_pos, size=self.interface_size)
-
-                ##保存特征
-                feature = self.model.get_feature(self.img)
-                fid = open(self.id_embedding, 'a')
-                for emb in feature:
-                    fid.write(str(emb) + ' ')
-                fid.write(account)
-                fid.write('\n')
-                fid.close()
-        except:  ####没有检测到人脸
-            self.accountLabel = wx.StaticText(self.middle, -1, u'没有检测到人脸', pos=(480, 780), size=(100, 100))
-            self.accountLabel.SetForegroundColour(self.themeColor)
-            self.accountLabel.SetFont(font)
-        # _thread.exit()
-
-    def select_Button(self, event):
+    def select(self, event):   ###用于从文件夹选择图片注册
         wildcard = 'All files(*.*)|*.*'
         dlg = wx.FileDialog(None, 'select', os.getcwd(), '', wildcard)
         #      dlg = wx.DirDialog(self,u"选择文件夹",style=wx.DD_DEFAULT_STYLE)
         if dlg.ShowModal() == wx.ID_OK:
             file = dlg.GetPath()
-            image = cv2.imread(file)
-            self.save_id(image)
+            self.img_captured = cv2.imread(file)
+            self.img_captured = cv2.resize(self.img_captured, (640, 640))
+            font = wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.BOLD, True)
+            h_row, w_row = self.img_captured.shape[:2]
+            self.bbox, self.aligned_face = model.get_input(self.img_captured)
+            image = cv2.resize(self.img_captured, self.interface_size)
+            w, h = self.interface_size[0], self.interface_size[1]
+            if len(self.bbox) > 0:
+                for i in range(len(self.bbox)):
+                    box = self.bbox[i]
+                    cv2.rectangle(image, (int(box[0] * w / w_row), int(box[1] * h / h_row)),
+                                  (int(box[2] * w / w_row), int(box[3] * h / h_row)), (55, 255, 155), 2)
+            else:
+                self.remindLabel = wx.StaticText(self.middle, -1, u'没有检测到人脸', pos=(450, 700), size=(100, 100))
+                self.remindLabel.SetFont(font)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            wxbmp = wx.BitmapFromBuffer(w, h, image)
+            self.image_button.SetBitmap(wxbmp)
 
     def MakeSure(self, event):  ###１．账户名不重复，２　保存embedding  3跳转界面
-        exist = 0
-        account = self.accountInput.GetValue()
         try:
-            self.accountLabel.Destroy()
-            self.accountInput.Clear()
+            self.remindLabel.Destroy()
         except:
             print()
-        if not os.path.exists(self.id_file):
-            os.mknod(self.id_file)
-        fid = open(self.id_file, 'r')
-        names = fid.readlines()
-        fid.close()
+        try:
+            self.accountInput.clear()
+        except:
+            print()
+
+        exist = 0
+        account = self.accountInput.GetValue()
+        ###已经输入账户名  1 保存图片和特征  2 清除界面上的账户名  3 显示刚刚开始的界面图片
         font = wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.BOLD, True)
-        # accountLabel = wx.StaticText(self.middle, -1, u'帐号已经存在', pos=(450, 700), size  = (100, 100))
-        if names is not None:
-            for name in names:
-                name = name.strip()
-                if name == account:
-                    exist = 1  ###当前用户名已经存在
-        if exist == 0:
-            # accountLabel.SetForegroundColour(self.colour)
-            fid = open(self.id_file, 'a')
-            fid.write(account + '\n')
+        if len(account) > 0:
+            if not os.path.exists(self.id_file):###如果保存姓名的文件不存在，新建
+                os.mknod(self.id_file)
+            fid = open(self.id_file, 'r')
+            names = fid.readlines()
+            fid.close()
+            font = wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.BOLD, True)
+            # accountLabel = wx.StaticText(self.middle, -1, u'帐号已经存在', pos=(450, 700), size  = (100, 100))
+            if names is not None:
+                for name in names:
+                    name = name.strip()
+                    if name == account:###判断当前账户是否存在
+                        exist = 1  ###当前用户名已经存在
+            if exist == 0:###当前账户不存在， 写入账户文件
+                fid = open(self.id_file, 'a')
+                fid.write(account + '\n')
+                fid.close()
+            else:  ###账户存在, 界面显示提醒
+                self.remindLabel = wx.StaticText(self.middle, -1, u'帐号已经存在', pos=(450, 700), size=(100, 100))
+                self.remindLabel.SetFont(font)
+
+        ###保存图片和特征
+                self.save_id(self.img_captured, self.bbox, self.aligned_face, account, event)
+
+            interface_img = wx.Image(load_image(self.interface_img), wx.BITMAP_TYPE_ANY).ConvertToBitmap()
+            self.image_button.SetBitmap(interface_img)
+
+        else:
+            self.remindLabel = wx.StaticText(self.middle, -1, u'请输入姓名', pos=(450, 700), size=(100, 100))
+            self.remindLabel.SetFont(font)
+
+
+
+    def save_id(self, image_row, bbox, aligned_face, account, event):  ###确定按钮保留采集的ID和feature  以及照片用于后面的相似度显示
+
+        ###如果检测到人脸 1 保存人脸图片 2 保存最大特征 3 界面恢复
+        font = wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.BOLD, True)
+        if len(bbox) > 0:
+            self.path_id = os.path.join(self.path, account)
+            if not os.path.exists(self.path_id):
+                os.makedirs(self.path_id)
+            file = os.listdir(self.path_id)
+            count = len(file) + 1
+            self.save_name = self.path_id + '/' + str(count) + '.jpeg'
+            max_face= aligned_face[0]
+            feature = model.get_feature(max_face)
+            fid = open(self.id_embedding, 'a')
+            # max_face = np.transpose(aligned_face[0], (1, 2, 0))  ###取最大的人脸
+            cv2.imwrite(self.save_name, image_row)
+            for emb in feature:
+                fid.write(str(emb) + ' ')
+            fid.write(account)
+            fid.write('\n')
             fid.close()
         else:
-            self.accountLabel = wx.StaticText(self.middle, -1, u'帐号已经存在', pos=(450, 700), size=(100, 100))
-            self.accountLabel.SetFont(font)
-        interface_img = wx.Image(load_image(self.interface_img), wx.BITMAP_TYPE_ANY).ConvertToBitmap()
-        wx.BitmapButton(self.middle, -1, interface_img, pos=self.interface_pos, size=self.interface_size)
+            self.remindLabel = wx.StaticText(self.middle, -1, u'没有检测到人脸', pos=(450, 700), size=(100, 100))
+            self.remindLabel.SetFont(font)
+
 
     def destroy(self, event):
         try:
-            self.accountLabel.Destroy()
             self.accountInput.Clear()
-
         except:
             print()
 
+        try:
+            self.remindLabel.Destroy()
+        except:
+            print()
+
+        interface_img = wx.Image(load_image(self.interface_img), wx.BITMAP_TYPE_ANY).ConvertToBitmap()
+        self.image_button.SetBitmap(interface_img)
+
     def rt_recognition(self, event):
-        fid = open(self.id_embedding, 'r')
-        embeddings = fid.readlines()
-        id = []
-        embed = []
-        for emb in embeddings:
-            emb = emb.strip()
-            emb = emb.split(' ')
-            id.append(emb.pop(-1))
-            embed.append(list(map(float, emb)))
-        fid.close()
-        cap = cv2.VideoCapture(0)
-        count = 0
-        while (cap.isOpened()):
-            flag, im_rd = cap.read()
-            img_PIL = Image.fromarray(cv2.cvtColor(im_rd, cv2.COLOR_BGR2RGB))
-            draw = ImageDraw.Draw(img_PIL)
-            font = ImageFont.truetype('NotoSansCJK-Black.ttc', 20, encoding="utf-8")
-            h, w, c = im_rd.shape
-            try:
-                img = cv2.resize(im_rd, (112, 112))
-                aligned, bbox = self.model.get_input(img)
-                for i in range(len(aligned)):
-                    img_align = aligned[i]
-                    box = bbox[i]
-                    feature = self.model.get_feature(img_align)
 
-                    ###using MSE distance
-                    dis_list = np.mean(np.square(np.subtract(feature, embed)), axis=1)
-                    min_dis = np.argmin(dis_list)
-                    if dis_list[min_dis] < 1.27:
-                        name = id[min_dis]
-                    else:
-                        name = 'unknown'
+        try:
+            self.accountLabel.Destroy()
+        except:
+            print()
+        try:
+            self.take_Button.Destroy()
+        except:
+            print()
+        try:
+            self.sure_Button.Destroy()
+        except:
+            print()
+        try:
+            self.delay_Button.Destroy()
+        except:
+            print()
+        try:
+            self.photo_sure.Destroy()
+        except:
+            print()
+        try:
+            self.photo_cancel.Destroy()
+        except:
+            print()
+        try:
+            self.select_Button.Destroy()
+        except:
+            print()
+        try:
+            self.accountInput.Destroy()
+        except:
+            print()
+        try:
+            self.remindLabel.Destroy()
+        except:
+            print()
 
-                    bbox_new = [box[0] * w / 112, box[1] * h / 112, box[2] * w / 112, box[3] * h / 112]
-                    # cv2.rectangle(im_rd, (int(bbox_new[0]),int(bbox_new[1])),(int(bbox_new[2]), int(bbox_new[3])), (0,0,255), 2)
-                    draw.rectangle((int(bbox_new[0]), int(bbox_new[1]), int(bbox_new[2]), int(bbox_new[3])), None,
-                                   (0, 0, 255), 2)
-                    draw.text((int(bbox_new[0]), int(bbox_new[1] - 40)), name, (55, 255, 155), font=font)
-                im_changed = cv2.cvtColor(np.asarray(img_PIL), cv2.COLOR_RGB2BGR)
-                cv2.imshow('img', im_changed)
-                if count % 20 == 0:
-                    self.similar_pthotos(im_rd, id, dis_list, 1)
-            except:
-                print('No face detected!!!')
-            count += 1
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
 
-        cap.release()
-        cv2.destroyAllWindows()
+        self.cancel_button = wx.Button(self.middle, -1, u'取  消', pos=(580, 600), size=(100, 30))
+        self.cancel_button.SetForegroundColour('white')
+        self.cancel_button.SetBackgroundColour(self.colour)
+        self.Bind(wx.EVT_BUTTON, self.rt_cancel, self.cancel_button)
+
+        self.Rt_thread = RtThread()
+        self.Rt_thread.start()
+
+    def show_rt_image(self, msg):
+
+        if msg is not None:
+            image = msg
+            h, w, c  = image.shape
+            pic = wx.Bitmap.FromBuffer(w, h, image)
+            self.image_button.SetBitmap(pic)
+
+    def rt_cancel(self, event):
+
+        wx.CallAfter(pub.sendMessage,'rt_cancel')
+        self.cancel_button.Destroy()
+        self.Rt_thread.stop()
+        interface_img = wx.Image(load_image(self.interface_img), wx.BITMAP_TYPE_ANY).ConvertToBitmap()
+        self.image_button.SetBitmap(interface_img)
+
+
 
     def similar_pthotos(self, im_rd, id_list, dis_list, target_num):
         for i in range(target_num):
@@ -313,29 +426,159 @@ class interface(wx.Frame):
             wx.BitmapButton(self.middle_right, -1, wxbmp, pos=(180, 50), size=(100, 100))
 
 
+class TestThread(threading.Thread):
+    """Test Worker Thread Class."""
+
+    # ----------------------------------------------------------------------
+    def __init__(self):
+        """Init Worker Thread Class."""
+        threading.Thread.__init__(self)
+        self.timetoQuit = threading.Event()  ###创建一个日志管理标志， event默认为False
+        self.timetoQuit.clear()   ###event标志为False, 调用wait所有的线程被阻塞
+
+
+    # ----------------------------------------------------------------------
+    def run(self):
+
+
+
+
+        self.cap = cv2.VideoCapture(0)
+        while(self.cap.isOpened()):
+            _, im_rd = self.cap.read()
+
+            wx.CallAfter(pub.sendMessage, "update", msg=im_rd)
+            pub.subscribe(self.sure, "sure")
+            pub.subscribe(self.cancel, "cancel")
+
+
+
+
+    def stop(self):
+        self.timetoQuit.set()##event 为True, 调用wait的所有线程被唤醒
+        self.timetoQuit.clear()
+
+    def sure(self):
+        try:
+            self.cap.release()
+        except:
+            print()
+
+    def cancel(self):
+        try:
+            self.cap.release()
+        except:
+            print()
+
+class RtThread(threading.Thread):
+    """Test Worker Thread Class."""
+
+    # ----------------------------------------------------------------------
+    def __init__(self):
+        """Init Worker Thread Class."""
+        threading.Thread.__init__(self)
+        self.timetoQuit = threading.Event()  ###创建一个日志管理标志， event默认为False
+        self.timetoQuit.clear()   ###event标志为False, 调用wait所有的线程被阻塞
+
+        self.interface_size = (600, 480)
+        self.id_embedding = 'id_embedding.txt'
+        self.count = 0
+        self.rtsp = 'rtsp://admin:ab123456@10.14.205.100/Streaming/Channels/101'
+
+
+    # ----------------------------------------------------------------------
+    def run(self):
+        """Run Worker Thread."""
+        # This is the code executing in the new thread.
+
+        ###load 保存的id 和 feature
+
+        fid = open(self.id_embedding, 'r')
+        embeddings = fid.readlines()
+        fid.close()
+
+        feature_all = np.zeros(shape = (len(embeddings), 512))
+        id = []
+
+        for i in range(len(embeddings)):
+            emb = embeddings[i].strip()
+            emb = emb.split(' ')
+            id.append(emb.pop(-1))
+            feature_all[i] = list(map(float, emb))
+
+
+        font = ImageFont.truetype('NotoSansCJK-Black.ttc', 20, encoding="utf-8")
+        self.cap = cv2.VideoCapture(self.rtsp)###'rtsp://admin:wangshanmin1994@10.14.227.220/h264/ch1/main/av_stream'
+        self.cap.set(cv2.CAP_PROP_FPS, 80)
+        w, h = self.interface_size[0], self.interface_size[1]
+        while(self.cap.isOpened()):
+            _, im_rd = self.cap.read()
+            im_rd = cv2.resize(im_rd, (640, 640))
+            h_row, w_row = im_rd.shape[:2]
+            image = cv2.resize(im_rd, self.interface_size)
+            # try:
+            bbox, aligned_face = model.get_input(im_rd)
+            img_PIL = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(img_PIL)
+            self.count  += 1
+            if self.count % 3 == 0:
+                for i in range(len(bbox)):
+
+                    name = 'unknown'
+                    face = aligned_face[i]
+                    feature = model.get_feature(face)
+                    dis_list = np.mean(np.square(np.subtract(feature, feature_all)), axis=1)
+                    min_dis = np.argmin(dis_list)
+                    if dis_list[min_dis] < 1.0:
+                        name = id[min_dis]
+                    box =  bbox[i]
+                    draw.rectangle((int(box[0]) * w / w_row, int(box[1])* h / h_row, int(box[2])* w / w_row, int(box[3])* h / h_row), None,
+                                                   (0, 0, 255), 2)
+                    draw.text((int(box[0])* w / w_row, int(box[1] - 10)* h / h_row), name, (55, 255, 155), font=font)
+                image_change = np.asarray(img_PIL)
+
+
+                wx.CallAfter(pub.sendMessage, "Rt-recognition", msg=image_change)
+                pub.subscribe(self.cancel, "rt_cancel")
+
+
+    def stop(self):
+        self.timetoQuit.set()##event 为True, 调用wait的所有线程被唤醒
+        self.timetoQuit.clear()
+
+
+    def cancel(self):
+        try:
+            self.cap.release()
+        except:
+            print()
+
+
+
 class App(wx.App):
     def __init__(self, redirect=True, filename=None):
         wx.App.__init__(self, redirect, filename)
-        self.model = self.load_model()
+        global model
+        model = self.load_model()
 
     def load_model(self):
         parser = argparse.ArgumentParser(description='face model test')
         # general
-        parser.add_argument('--image-size', default='112,112', help='')
-        parser.add_argument('--model', default='/home/wangshanmin/academy/insightface/models/model,00',
-                            help='path to load model.')
-        parser.add_argument('--ga-model', default='',
-                            help='path to load model.')
-        parser.add_argument('--gpu', default=0, type=int, help='gpu id')
-        parser.add_argument('--det', default=0, type=int,
-                            help='mtcnn option, 1 means using R+O, 0 means detect from begining')
-        parser.add_argument('--flip', default=0, type=int, help='whether do lr flip aug')
-        parser.add_argument('--threshold', default=1.24, type=float, help='ver dist threshold')
+        parser.add_argument('--model_path', default='../RetinaFace/mnet.25/mnet.25',
+                            help='model_path for face detection')
+        parser.add_argument('--model', default=00, type=int,
+                            help='model.')
+        parser.add_argument('--gpuid', default=0, type=int, help='gpu id')
+        parser.add_argument('--net', default='net3',
+                            help='net')
+
+        parser.add_argument('--model_recog', default='../recognition/model/y2-arcface-retina/model,01',
+                            help='path to load model for face recognition.')
         args = parser.parse_args()
-        return face_model.FaceModel(args)
+        return retinaface_model.FaceModel(args)
 
     def InitUI(self):
-        Frame = interface(parent=None, id=-1, model=self.model)
+        Frame = interface(parent=None, id=-1)
 
         Frame.Show()
 
@@ -344,3 +587,6 @@ if __name__ == '__main__':
     App = App()
     App.InitUI()
     App.MainLoop()
+
+
+
