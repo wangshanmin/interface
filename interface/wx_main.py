@@ -26,7 +26,7 @@ class interface(wx.Frame):
     def __init__(self,parent, id):
         wx.Frame.__init__(self,parent = None, id = -1, title = '人脸识别系统',size = (1280, 960))
         self.interface_img = 'interface.jpeg'
-        self.path = 'img_save/'
+        self.path = 'register_img/'
         self.initpos = 200
         self.minpane = 400
         self.interface_size = (600, 480)
@@ -35,6 +35,7 @@ class interface(wx.Frame):
         self.id_file = 'id_file.txt'
         self.id_embedding = 'id_embedding.txt'
         self.colour = (148, 175, 255)
+        self.target_num = 3
         self.InitUI()
 
     def InitUI(self):
@@ -145,9 +146,9 @@ class interface(wx.Frame):
     def show_image(self, msg):   #####UI 线程将采集到的图片显示在界面上
 
         if msg is not None:
-            self.img_captured = cv2.cvtColor(msg, cv2.COLOR_BGR2RGB)
-            self.img_captured = cv2.resize(self.img_captured, (640, 640))
+            self.img_captured = cv2.resize(msg, (640, 640))
             image = cv2.resize(self.img_captured, (self.interface_size))
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             h, w, c  = image.shape
             pic = wx.Bitmap.FromBuffer(w, h, image)
             self.image_button.SetBitmap(pic)
@@ -308,8 +309,8 @@ class interface(wx.Frame):
             if not os.path.exists(self.path_id):
                 os.makedirs(self.path_id)
             file = os.listdir(self.path_id)
-            count = len(file) + 1
-            self.save_name = self.path_id + '/' + str(count) + '.jpeg'
+            count = len(file)
+            self.save_name = self.path_id + '/'  + str(count) + '.jpg'
             max_face= aligned_face[0]
             feature = model.get_feature(max_face)
             fid = open(self.id_embedding, 'a')
@@ -317,7 +318,7 @@ class interface(wx.Frame):
             cv2.imwrite(self.save_name, image_row)
             for emb in feature:
                 fid.write(str(emb) + ' ')
-            fid.write(account)
+            fid.write(account+ '_' + str(count))
             fid.write('\n')
             fid.close()
         else:
@@ -390,10 +391,15 @@ class interface(wx.Frame):
     def show_rt_image(self, msg):
 
         if msg is not None:
-            image = msg
+            image = msg[0]
             h, w, c  = image.shape
             pic = wx.Bitmap.FromBuffer(w, h, image)
             self.image_button.SetBitmap(pic)
+            if len(msg) > 1:####检测到人脸
+                max_face = msg[1]
+                dis_maxface = msg[2]
+                id_maxface = msg[3]
+                # self.similar_pthotos(max_face, dis_maxface, id_maxface)
 
     def rt_cancel(self, event):
 
@@ -405,25 +411,42 @@ class interface(wx.Frame):
 
 
 
-    def similar_pthotos(self, im_rd, id_list, dis_list, target_num):
-        for i in range(target_num):
-            target_location = np.argmin(dis_list)
-            id = id_list[target_location]
-            dis_list = np.delete(dis_list, target_location)
-            id_list = np.delete(id_list, target_location)
-            target_id = os.path.join(self.path, r'%s' % id)
-            similar_img = os.path.join(target_id, random.choice(os.listdir(target_id)))
+    # def similar_pthotos(self, max_face, dis_maxface, id_maxface):
+    #    ####列出与其最相似的三张图片
+    #     cap_x, cap_y = 20, 200
+    #     contrast_x, contrast_y = 170, 200
+    #
+    #
+    #     dis_maxface = list(dis_maxface)
+    #     id_maxface = list(id_maxface)
+    #
+    #     max_face = cv2.cvtColor(max_face, cv2.COLOR_BGR2RGB)
+    #     for i in range(self.target_num):
+    #         target_dis = np.argmin(dis_maxface)
+    #         target_id = id_maxface[target_dis]
+    #
+    #         dis_maxface.pop(target_dis)
+    #         id_maxface.pop(target_dis)
+    #
+    #         ###读取图片
+    #         target_id = target_id.split('_')
+    #         name, img_index  = target_id[0], target_id[1]
+    #         img_name = os.path.join(self.path, name) + '/' + str(img_index) + '.jpg'
+    #         image = cv2.imread(img_name)
+    #         max_face = cv2.resize(max_face, (100, 100))
+    #         image = cv2.resize(image, (100, 100))
+    #
+    #         img_cap = wx.StaticBitmap(self.middle_right, pos=(cap_x, cap_y))
+    #         img_contrast = wx.StaticBitmap(self.middle_right, pos=(contrast_x, contrast_y))
+    #         image_bmp = wx.BitmapFromBuffer(100, 100, image)
+    #         maxface_bmp = wx.BitmapFromBuffer(100, 100, max_face)
+    #         img_contrast.SetBitmap(image_bmp)
+    #         img_cap.SetBitmap(maxface_bmp)
+    #         cap_y += 150
+    #         contrast_y += 150
 
-            ###show 采集到的图片
-            # im_rd = cv2.resize(im_rd, (100,100))
-            # im_rd = cv2.cvtColor(im_rd, cv2.COLOR_BGR2RGB)
-            # wxbmp_row = wx.BitmapFromBuffer(100,100, im_rd)
-            # wx.BitmapButton(self.middle_right, -1, wxbmp_row, pos=(20, 50), size=(100, 100))
-            #
-            img_similar = cv2.resize(cv2.imread(similar_img), (100, 100))
-            # img_similar = cv2.cvtColor(img_similar, cv2.COLOR_BGR2RGB)
-            wxbmp = wx.BitmapFromBuffer(100, 100, img_similar)
-            wx.BitmapButton(self.middle_right, -1, wxbmp, pos=(180, 50), size=(100, 100))
+
+
 
 
 class TestThread(threading.Thread):
@@ -446,7 +469,6 @@ class TestThread(threading.Thread):
         self.cap = cv2.VideoCapture(0)
         while(self.cap.isOpened()):
             _, im_rd = self.cap.read()
-
             wx.CallAfter(pub.sendMessage, "update", msg=im_rd)
             pub.subscribe(self.sure, "sure")
             pub.subscribe(self.cancel, "cancel")
@@ -508,8 +530,8 @@ class RtThread(threading.Thread):
 
 
         font = ImageFont.truetype('NotoSansCJK-Black.ttc', 20, encoding="utf-8")
-        self.cap = cv2.VideoCapture(self.rtsp)###'rtsp://admin:wangshanmin1994@10.14.227.220/h264/ch1/main/av_stream'
-        self.cap.set(cv2.CAP_PROP_FPS, 80)
+        self.cap = cv2.VideoCapture(0)###'rtsp://admin:wangshanmin1994@10.14.227.220/h264/ch1/main/av_stream'
+        self.cap.set(cv2.CAP_PROP_FPS, 200)
         w, h = self.interface_size[0], self.interface_size[1]
         while(self.cap.isOpened()):
             _, im_rd = self.cap.read()
@@ -520,8 +542,7 @@ class RtThread(threading.Thread):
             bbox, aligned_face = model.get_input(im_rd)
             img_PIL = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(img_PIL)
-            self.count  += 1
-            if self.count % 3 == 0:
+            if self.count % 5 == 0:
                 for i in range(len(bbox)):
 
                     name = 'unknown'
@@ -529,16 +550,23 @@ class RtThread(threading.Thread):
                     feature = model.get_feature(face)
                     dis_list = np.mean(np.square(np.subtract(feature, feature_all)), axis=1)
                     min_dis = np.argmin(dis_list)
-                    if dis_list[min_dis] < 1.0:
+                    if dis_list[min_dis] < 0.01:
                         name = id[min_dis]
+                        name = name.split('_')[0]
                     box =  bbox[i]
                     draw.rectangle((int(box[0]) * w / w_row, int(box[1])* h / h_row, int(box[2])* w / w_row, int(box[3])* h / h_row), None,
                                                    (0, 0, 255), 2)
                     draw.text((int(box[0])* w / w_row, int(box[1] - 10)* h / h_row), name, (55, 255, 155), font=font)
+                    if i == 0:
+                        max_face = im_rd[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
+                        dis_maxface = dis_list
+                        id_maxface = id
                 image_change = np.asarray(img_PIL)
 
-
-                wx.CallAfter(pub.sendMessage, "Rt-recognition", msg=image_change)
+                if len(aligned_face) > 0:####画面中出现人脸
+                    wx.CallAfter(pub.sendMessage, "Rt-recognition", msg=[image_change, max_face, dis_maxface, id_maxface])
+                else:
+                    wx.CallAfter(pub.sendMessage, "Rt-recognition",msg=[image_change])
                 pub.subscribe(self.cancel, "rt_cancel")
 
 
