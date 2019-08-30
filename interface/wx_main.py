@@ -142,20 +142,6 @@ class interface(wx.Frame):
         pub.subscribe(self.show_image, "update")     #####接受拍照采集照片子线程的消息, 接受子线程传递的图片，并显示在桌面上
 
 
-
-    def show_image(self, msg):   #####UI 线程将采集到的图片显示在界面上
-
-        if msg is not None:
-            self.img_captured = cv2.resize(msg, (640, 640))
-            image = cv2.resize(self.img_captured, (self.interface_size))
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            h, w, c  = image.shape
-            pic = wx.Bitmap.FromBuffer(w, h, image)
-            self.image_button.SetBitmap(pic)
-
-
-
-
     def takephoto(self, event):   ###拍照按钮出发的事件， 采用多线程的方式，子线程采集图片，线程显示在界面上：
         #####1 界面上增加确定和取消按钮  2 重载一个线程类，重构run函数 3 开启线程
         try:
@@ -176,8 +162,20 @@ class interface(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.cancel_photo, self.photo_cancel)
 
 
-        self.thread = TestThread()
+        self.thread = Register_Thread()
         self.thread.start()
+
+    def show_image(self, msg):   #####UI 线程将采集到的图片显示在界面上
+
+        if msg is not None:
+            self.img_captured = cv2.resize(msg, (640, 640))
+            image = cv2.resize(self.img_captured, (self.interface_size))
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            h, w, c  = image.shape
+            pic = wx.Bitmap.FromBuffer(w, h, image)
+            self.image_button.SetBitmap(pic)
+            wx.CallAfter(pub.sendMessage, 'sure')
+            self.thread.stop()
 
 
 
@@ -206,8 +204,7 @@ class interface(wx.Frame):
 
         self.photo_cancel.Destroy()
         self.photo_sure.Destroy()
-        wx.CallAfter(pub.sendMessage, 'sure')
-        self.thread.stop()
+
 
 
 
@@ -449,7 +446,7 @@ class interface(wx.Frame):
 
 
 
-class TestThread(threading.Thread):
+class Register_Thread(threading.Thread):
     """Test Worker Thread Class."""
 
     # ----------------------------------------------------------------------
@@ -458,18 +455,23 @@ class TestThread(threading.Thread):
         threading.Thread.__init__(self)
         self.timetoQuit = threading.Event()  ###创建一个日志管理标志， event默认为False
         self.timetoQuit.clear()   ###event标志为False, 调用wait所有的线程被阻塞
-
+        self.rtsp = 'rtsp://admin:ab123456@10.14.205.100/Streaming/Channels/101'
+        self.target_length = 10
 
     # ----------------------------------------------------------------------
     def run(self):
 
-
-
-
-        self.cap = cv2.VideoCapture(0)
+        stack = []
+        self.cap = cv2.VideoCapture(self.rtsp)
+        self.cap.set(cv2.CAP_PROP_FPS, 40)
         while(self.cap.isOpened()):
             _, im_rd = self.cap.read()
-            wx.CallAfter(pub.sendMessage, "update", msg=im_rd)
+            ###栈溢出
+            if len(stack) > self.target_length:
+                del stack[:]
+            if _:
+                stack.append(im_rd)
+            wx.CallAfter(pub.sendMessage, "update", msg = stack.pop())
             pub.subscribe(self.sure, "sure")
             pub.subscribe(self.cancel, "cancel")
 
@@ -492,6 +494,9 @@ class TestThread(threading.Thread):
         except:
             print()
 
+
+
+
 class RtThread(threading.Thread):
     """Test Worker Thread Class."""
 
@@ -502,7 +507,7 @@ class RtThread(threading.Thread):
         self.timetoQuit = threading.Event()  ###创建一个日志管理标志， event默认为False
         self.timetoQuit.clear()   ###event标志为False, 调用wait所有的线程被阻塞
 
-        self.interface_size = (600, 480)
+        self.interface_size = (600,  480)
         self.id_embedding = 'id_embedding.txt'
         self.count = 0
         self.rtsp = 'rtsp://admin:ab123456@10.14.205.100/Streaming/Channels/101'
@@ -514,7 +519,6 @@ class RtThread(threading.Thread):
         # This is the code executing in the new thread.
 
         ###load 保存的id 和 feature
-
         fid = open(self.id_embedding, 'r')
         embeddings = fid.readlines()
         fid.close()
@@ -528,13 +532,14 @@ class RtThread(threading.Thread):
             id.append(emb.pop(-1))
             feature_all[i] = list(map(float, emb))
 
-
         font = ImageFont.truetype('NotoSansCJK-Black.ttc', 20, encoding="utf-8")
-        self.cap = cv2.VideoCapture(0)###'rtsp://admin:wangshanmin1994@10.14.227.220/h264/ch1/main/av_stream'
-        self.cap.set(cv2.CAP_PROP_FPS, 200)
+        self.cap = cv2.VideoCapture(self.rtsp)###'rtsp://admin:wangshanmin1994@10.14.227.220/h264/ch1/main/av_stream'
+        self.cap.set(cv2.CAP_PROP_FPS, 40)
         w, h = self.interface_size[0], self.interface_size[1]
         while(self.cap.isOpened()):
+
             _, im_rd = self.cap.read()
+            time1 = time.time()
             im_rd = cv2.resize(im_rd, (640, 640))
             h_row, w_row = im_rd.shape[:2]
             image = cv2.resize(im_rd, self.interface_size)
@@ -542,7 +547,7 @@ class RtThread(threading.Thread):
             bbox, aligned_face = model.get_input(im_rd)
             img_PIL = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
             draw = ImageDraw.Draw(img_PIL)
-            if self.count % 5 == 0:
+            if self.count % 4 == 0:
                 for i in range(len(bbox)):
 
                     name = 'unknown'
