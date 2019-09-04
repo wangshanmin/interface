@@ -136,16 +136,40 @@
 # frm = MainFrame(None, title='分析工具')
 # frm.Show()
 # app.MainLoop()
-class A():
-    global a
-    a = 1
+import numpy  as np
+import time
+from numba import jit
+file = './id_embedding.txt'
 
+# @jit
+def data():
 
+    fid = open(file, 'r')
+    contexts = fid.readlines()
 
-class B():
-    b = a
-    print(b)
+    fid.close()
+    embedding = {}
+    for i in range(len(contexts)):
+        context = contexts[i].strip()
+        context = context.split(' ')
+        name = context.pop(-1)
+        embedding[name] = list(map(float,context))
+
+    target_name = list(embedding.keys())[0]
+    target = list(embedding.values())[0]
+    feature = np.array(target)
+    feature_all = np.array(list(embedding.values()))
+
+    dis = np.mean(np.square(np.subtract(feature, feature_all)), axis=1)
+    index = np.argmin(dis)
+    name = list(embedding.keys())[index]
+    print(name)
+
 
 if __name__ == '__main__':
-    A_ = A
-    B_ = B
+    data()
+
+
+
+
+

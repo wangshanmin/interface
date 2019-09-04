@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Wed May 29 12:18:32 2019
-
-@author: wangshanmin
-"""
-#
 import sys
 sys.path.append('../deploy')
 import wx
@@ -22,6 +14,7 @@ from PIL import Image, ImageDraw, ImageFont
 import sklearn
 from wx.lib.pubsub import pub
 import time
+import queue
 class interface(wx.Frame):
     def __init__(self,parent, id):
         wx.Frame.__init__(self,parent = None, id = -1, title = '人脸识别系统',size = (1280, 960))
@@ -385,17 +378,18 @@ class interface(wx.Frame):
         self.Rt_thread = RtThread()
         self.Rt_thread.start()
 
-    def show_rt_image(self, msg):
 
-        if msg is not None:
-            image = msg[0]
+
+    def show_rt_image(self):
+        if not q.empty():
+            image = q.get()
             h, w, c  = image.shape
             pic = wx.Bitmap.FromBuffer(w, h, image)
             self.image_button.SetBitmap(pic)
-            if len(msg) > 1:####检测到人脸
-                max_face = msg[1]
-                dis_maxface = msg[2]
-                id_maxface = msg[3]
+            # if len(msg) > 1:####检测到人脸
+            #     max_face = msg[1]
+            #     dis_maxface = msg[2]
+            #     id_maxface = msg[3]
                 # self.similar_pthotos(max_face, dis_maxface, id_maxface)
 
     def rt_cancel(self, event):
@@ -510,7 +504,7 @@ class RtThread(threading.Thread):
         self.interface_size = (600,  480)
         self.id_embedding = 'id_embedding.txt'
         self.count = 0
-        self.rtsp = 'rtsp://admin:ab123456@10.14.205.100/Streaming/Channels/101'
+        self.rtsp = 'rtsp://admin:ab123456@10.14.205.100/Streaming/Channels/101/ch1-s1?tcp'
 
 
     # ----------------------------------------------------------------------
@@ -522,32 +516,34 @@ class RtThread(threading.Thread):
         fid = open(self.id_embedding, 'r')
         embeddings = fid.readlines()
         fid.close()
+        count = 0
 
-        feature_all = np.zeros(shape = (len(embeddings), 512))
-        id = []
-
+        embed = {}
         for i in range(len(embeddings)):
             emb = embeddings[i].strip()
             emb = emb.split(' ')
-            id.append(emb.pop(-1))
-            feature_all[i] = list(map(float, emb))
+            name = emb.pop(-1)
+            embed[name] = list(map(float, emb))
+
+        feature_all = np.array(list(embed.values()))
+        id = list(embed.keys())
 
         font = ImageFont.truetype('NotoSansCJK-Black.ttc', 20, encoding="utf-8")
         self.cap = cv2.VideoCapture(self.rtsp)###'rtsp://admin:wangshanmin1994@10.14.227.220/h264/ch1/main/av_stream'
-        self.cap.set(cv2.CAP_PROP_FPS, 40)
+        self.cap.set(cv2.CAP_PROP_FPS, 10)
         w, h = self.interface_size[0], self.interface_size[1]
         while(self.cap.isOpened()):
 
             _, im_rd = self.cap.read()
+
             time1 = time.time()
             im_rd = cv2.resize(im_rd, (640, 640))
             h_row, w_row = im_rd.shape[:2]
             image = cv2.resize(im_rd, self.interface_size)
-            # try:
-            bbox, aligned_face = model.get_input(im_rd)
-            img_PIL = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-            draw = ImageDraw.Draw(img_PIL)
-            if self.count % 4 == 0:
+            try:
+                bbox, aligned_face = model.get_input(im_rd)
+                img_PIL = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+                draw = ImageDraw.Draw(img_PIL)
                 for i in range(len(bbox)):
 
                     name = 'unknown'
@@ -555,24 +551,39 @@ class RtThread(threading.Thread):
                     feature = model.get_feature(face)
                     dis_list = np.mean(np.square(np.subtract(feature, feature_all)), axis=1)
                     min_dis = np.argmin(dis_list)
-                    if dis_list[min_dis] < 0.01:
+                    if dis_list[min_dis] < 0.0025:
                         name = id[min_dis]
                         name = name.split('_')[0]
                     box =  bbox[i]
                     draw.rectangle((int(box[0]) * w / w_row, int(box[1])* h / h_row, int(box[2])* w / w_row, int(box[3])* h / h_row), None,
                                                    (0, 0, 255), 2)
                     draw.text((int(box[0])* w / w_row, int(box[1] - 10)* h / h_row), name, (55, 255, 155), font=font)
-                    if i == 0:
-                        max_face = im_rd[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
-                        dis_maxface = dis_list
-                        id_maxface = id
+            #         if i == 0:
+            #             max_face = im_rd[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
+            #             dis_maxface = dis_list
+            #             id_maxface = id
                 image_change = np.asarray(img_PIL)
+            #
+            # if len(aligned_face) > 0:####画面中出现人脸
+            #         wx.CallAfter(pub.sendMessage, "Rt-recognition", msg=[image_change, max_face, dis_maxface, id_maxface])
+            # else:
+                wx.CallAfter(pub.sendMessage, "Rt-recognition")
+                q.put(image)
 
-                if len(aligned_face) > 0:####画面中出现人脸
-                    wx.CallAfter(pub.sendMessage, "Rt-recognition", msg=[image_change, max_face, dis_maxface, id_maxface])
-                else:
-                    wx.CallAfter(pub.sendMessage, "Rt-recognition",msg=[image_change])
                 pub.subscribe(self.cancel, "rt_cancel")
+
+                if count < 50:
+                    save_path = os.path.join(os.getcwd(), 'rt_image')
+                    save_name = save_path + '/' + str(count) + '.jpg'
+                    print(save_name)
+                    cv2.imwrite(save_name, im_rd)
+                    count += 1
+                else:
+                    count = 0
+                time2 = time.time()
+                print(time2 - time1)
+            except:
+                print('image capture error')
 
 
     def stop(self):
@@ -593,6 +604,8 @@ class App(wx.App):
         wx.App.__init__(self, redirect, filename)
         global model
         model = self.load_model()
+        global q
+        q = queue.Queue(maxsize = 5)
 
     def load_model(self):
         parser = argparse.ArgumentParser(description='face model test')
@@ -620,6 +633,3 @@ if __name__ == '__main__':
     App = App()
     App.InitUI()
     App.MainLoop()
-
-
-
