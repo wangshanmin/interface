@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Wed May 29 12:18:32 2019
-
-@author: wangshanmin
-"""
-#
 import sys
 sys.path.append('../deploy')
 import wx
@@ -13,16 +5,16 @@ import cv2
 import argparse
 import retinaface_model
 from utils import load_image
-import random
 import numpy as np
 import threading
-import _thread
 import os
 from PIL import Image, ImageDraw, ImageFont
-import sklearn
 from wx.lib.pubsub import pub
 import time
 import queue
+
+q = queue.Queue(maxsize = 3)
+q_deal = queue.Queue(maxsize = 3)
 
 class interface(wx.Frame):
     def __init__(self,parent, id):
@@ -33,7 +25,7 @@ class interface(wx.Frame):
         self.minpane = 400
         self.interface_size = (600, 480)
         self.themeColor = '#0a74f7'
-        self.interface_pos = (90,100)
+        self.interface_pos = (80,90)
         self.id_file = 'id_file.txt'
         self.id_embedding = 'id_embedding.txt'
         self.colour = (148, 175, 255)
@@ -101,8 +93,10 @@ class interface(wx.Frame):
         self.image_button = wx.StaticBitmap(self.middle, pos=self.interface_pos)
 
         ####UI线程接收Deal线程  处理后的数据
-        pub.subscribe(self.deal_data, 'Camera_data')
         pub.subscribe(self.show_deal_data, 'Deal_data')   ####显示处理后的数据
+
+
+        self.deal_thread = Display_thread()
 
     ####注册界面
     def register(self, event):
@@ -146,6 +140,7 @@ class interface(wx.Frame):
         pub.subscribe(self.show_image, "register")     ##### 注册 接受拍照采集照片子线程的消息, 接受子线程传递的图片，并显示在桌面上
 
 
+
     def takephoto(self, event):   ###拍照按钮出发的事件， 采用多线程的方式，子线程采集图片，线程显示在界面上：
         #####1 界面上增加确定和取消按钮  2 重载一个线程类，重构run函数 3 开启线程
         try:
@@ -178,8 +173,7 @@ class interface(wx.Frame):
             h, w, c  = image.shape
             pic = wx.Bitmap.FromBuffer(w, h, image)
             self.image_button.SetBitmap(pic)
-            wx.CallAfter(pub.sendMessage, 'sure')
-            self.thread.stop()
+
 
 
 
@@ -190,8 +184,7 @@ class interface(wx.Frame):
         image = cv2.resize(self.img_captured, self.interface_size)
         w, h = self.interface_size[0], self.interface_size[1]
 
-        aligned_face, bbox = None, None
-        self.bbox, self.aligned_face = model.get_input(self.img_captured)
+        self.bbox, self.features = model.get_input(self.img_captured)
         if len(self.bbox) > 0:
             for i in range(len(self.bbox)):
                 box = self.bbox[i]
@@ -201,13 +194,16 @@ class interface(wx.Frame):
             self.remindLabel = wx.StaticText(self.middle, -1, u'没有检测到人脸', pos=(450, 700), size=(100, 100))
             self.remindLabel.SetFont(font)
 
+
         wxbmp = wx.BitmapFromBuffer(w, h, image)
         self.image_button.SetBitmap(wxbmp)
 
-
+        wx.CallAfter(pub.sendMessage, 'sure')
 
         self.photo_cancel.Destroy()
         self.photo_sure.Destroy()
+        self.thread.stop()
+
 
 
 
@@ -239,7 +235,7 @@ class interface(wx.Frame):
             self.img_captured = cv2.resize(self.img_captured, (640, 640))
             font = wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.BOLD, True)
             h_row, w_row = self.img_captured.shape[:2]
-            self.bbox, self.aligned_face = model.get_input(self.img_captured)
+            self.bbox, self.features= model.get_input(self.img_captured)
             image = cv2.resize(self.img_captured, self.interface_size)
             w, h = self.interface_size[0], self.interface_size[1]
             if len(self.bbox) > 0:
@@ -290,7 +286,7 @@ class interface(wx.Frame):
                 self.remindLabel.SetFont(font)
 
         ###保存图片和特征
-                self.save_id(self.img_captured, self.bbox, self.aligned_face, account, event)
+                self.save_id(self.img_captured, self.bbox, self.features, account, event)
 
             interface_img = wx.Image(load_image(self.interface_img), wx.BITMAP_TYPE_ANY).ConvertToBitmap()
             self.image_button.SetBitmap(interface_img)
@@ -301,7 +297,7 @@ class interface(wx.Frame):
 
 
 
-    def save_id(self, image_row, bbox, aligned_face, account, event):  ###确定按钮保留采集的ID和feature  以及照片用于后面的相似度显示
+    def save_id(self, image_row, bbox, features, account, event):  ###确定按钮保留采集的ID和feature  以及照片用于后面的相似度显示
 
         ###如果检测到人脸 1 保存人脸图片 2 保存最大特征 3 界面恢复
         font = wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.BOLD, True)
@@ -312,12 +308,12 @@ class interface(wx.Frame):
             file = os.listdir(self.path_id)
             count = len(file)
             self.save_name = self.path_id + '/'  + str(count) + '.jpg'
-            max_face= aligned_face[0]
-            feature = model.get_feature(max_face)
+            # max_face= aligned_face[0]
+            # feature = model.get_feature(max_face)
             fid = open(self.id_embedding, 'a')
             # max_face = np.transpose(aligned_face[0], (1, 2, 0))  ###取最大的人脸
             cv2.imwrite(self.save_name, image_row)
-            for emb in feature:
+            for emb in features[0]:
                 fid.write(str(emb) + ' ')
             fid.write(account+ '_' + str(count))
             fid.write('\n')
@@ -386,81 +382,46 @@ class interface(wx.Frame):
         self.cancel_button.SetBackgroundColour(self.colour)
         self.Bind(wx.EVT_BUTTON, self.rt_cancel, self.cancel_button)
 
+        # try:
+        #     print(threading.enumerate())
+        #     self.receive_thread.restart()
+        #     self.deal_thread.restart()
+        #
+        #
+        # except:
 
-        self.receive_thread = Receive_Thread()   #####识别时摄像头采集的线程
-        # self.deal_thread = Deal_Thread()
+
         # self.receive_thread.setDaemon(True)
-        self.receive_thread.start()
+        # self.deal_thread.setDaemon(True)
+        self.receive_thread = Receive_thread()  #####识别时摄像头采集的线程
+        try:
+            self.receive_thread.start()
+            self.deal_thread.start()
+        except:
+            self.deal_thread.restart()
 
-        # self.deal_thread.start()
-
-
-####接收到摄像头采集线程传递回来的数据，将其传递给数据处理线程
-    def deal_data(self):
-        self.deal_thread = Deal_Thread()
-        self.deal_thread.start()
-
-#####接收到数据处理线程传递回来的数据，显示在界面上
-    def show_deal_data(self, msg):
-        self.deal_thread.stop()
-        if msg is not None:
-            image = msg[0]
+    def show_deal_data(self):
+        if not q_deal.empty():
+            image = q_deal.get()
             h, w, c  = image.shape
             pic = wx.Bitmap.FromBuffer(w, h, image)
             self.image_button.SetBitmap(pic)
-            if len(msg) > 1:####检测到人脸
-                max_face = msg[1]
-                dis_maxface = msg[2]
-                id_maxface = msg[3]
+
+            # if len(image) > 1:####检测到人脸
+            #     max_face = msg[1]
+            #     dis_maxface = msg[2]
+            #     id_maxface = msg[3]
                 # self.similar_pthotos(max_face, dis_maxface, id_maxface)
-        self.deal_thread.stop()
 
     def rt_cancel(self, event):
-
         wx.CallAfter(pub.sendMessage,'camera_cancel')
         self.cancel_button.Destroy()
         interface_img = wx.Image(load_image(self.interface_img), wx.BITMAP_TYPE_ANY).ConvertToBitmap()
         self.image_button.SetBitmap(interface_img)
         self.receive_thread.stop()
 
-
-
-
-    # def similar_pthotos(self, max_face, dis_maxface, id_maxface):
-    #    ####列出与其最相似的三张图片
-    #     cap_x, cap_y = 20, 200
-    #     contrast_x, contrast_y = 170, 200
-    #
-    #
-    #     dis_maxface = list(dis_maxface)
-    #     id_maxface = list(id_maxface)
-    #
-    #     max_face = cv2.cvtColor(max_face, cv2.COLOR_BGR2RGB)
-    #     for i in range(self.target_num):
-    #         target_dis = np.argmin(dis_maxface)
-    #         target_id = id_maxface[target_dis]
-    #
-    #         dis_maxface.pop(target_dis)
-    #         id_maxface.pop(target_dis)
-    #
-    #         ###读取图片
-    #         target_id = target_id.split('_')
-    #         name, img_index  = target_id[0], target_id[1]
-    #         img_name = os.path.join(self.path, name) + '/' + str(img_index) + '.jpg'
-    #         image = cv2.imread(img_name)
-    #         max_face = cv2.resize(max_face, (100, 100))
-    #         image = cv2.resize(image, (100, 100))
-    #
-    #         img_cap = wx.StaticBitmap(self.middle_right, pos=(cap_x, cap_y))
-    #         img_contrast = wx.StaticBitmap(self.middle_right, pos=(contrast_x, contrast_y))
-    #         image_bmp = wx.BitmapFromBuffer(100, 100, image)
-    #         maxface_bmp = wx.BitmapFromBuffer(100, 100, max_face)
-    #         img_contrast.SetBitmap(image_bmp)
-    #         img_cap.SetBitmap(maxface_bmp)
-    #         cap_y += 150
-    #         contrast_y += 150
-
-
+        self.deal_thread.stop()
+        print(threading.enumerate())
 
 
 
@@ -474,31 +435,26 @@ class Register_Thread(threading.Thread):
         self.timetoQuit = threading.Event()  ###创建一个日志管理标志， event默认为False
         self.timetoQuit.clear()   ###event标志为False, 调用wait所有的线程被阻塞
         self.rtsp = 'rtsp://admin:ab123456@10.14.205.100/Streaming/Channels/101'
-        self.target_length = 10
 
     # ----------------------------------------------------------------------
     def run(self):
 
-        stack = []
-        self.cap = cv2.VideoCapture(self.rtsp)
-        self.cap.set(cv2.CAP_PROP_FPS, 40)
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+
         while(self.cap.isOpened()):
             _, im_rd = self.cap.read()
-            ###栈溢出
-            if len(stack) > self.target_length:
-                del stack[:]
-            if _:
-                stack.append(im_rd)
-            wx.CallAfter(pub.sendMessage, "register", msg = stack.pop())
+            wx.CallAfter(pub.sendMessage, "register", msg = im_rd)
             pub.subscribe(self.sure, "sure")
             pub.subscribe(self.cancel, "cancel")
 
 
+    def cancel(self):
+        try:
+            self.cap.release()
+        except:
+            print()
 
-
-    def stop(self):
-        self.timetoQuit.set()##event 为True, 调用wait的所有线程被唤醒
-        self.timetoQuit.clear()
 
     def sure(self):
         try:
@@ -506,52 +462,41 @@ class Register_Thread(threading.Thread):
         except:
             print()
 
-    def cancel(self):
-        try:
-            self.cap.release()
-        except:
-            print()
+    def stop(self):
+        self.timetoQuit.set()  ##event 为True, 调用wait的所有线程被唤醒
+        self.timetoQuit.clear()
 
 
-####实时识别人脸 开两个线程，一个用于opencv读取图片，一个用于处理数据
-
-class Receive_Thread(threading.Threa):
-
-
+class Receive_thread(threading.Thread):
     def __init__(self):
         """Init Worker Thread Class."""
         threading.Thread.__init__(self)
         self.timetoQuit = threading.Event()  ###创建一个日志管理标志， event默认为False
-        self.timetoQuit.clear()   ###event标志为False, 调用wait所有的线程被阻塞
+        self.timetoQuit.clear()  ###event标志为False, 调用wait所有的线程被阻塞
         self.rtsp = 'rtsp://admin:ab123456@10.14.205.100/Streaming/Channels/101/ch1-s1?tcp'
 
-    def run(self):
 
-        ###打开摄像头
+    def run(self):
+    ###打开摄像头
         count = 0
         self.cap = cv2.VideoCapture(self.rtsp)
-        self.cap.set(cv2.CAP_PROP_FPS, 20)
-        # lock = threading.Lock()
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
 
-        ret, im_rd = self.cap.read()
-        while (ret):
-            _, im_rd = self.cap.read()
-            q.put(im_rd)
-            ###将采集到的图片发送给UI线程
-            if count < 50:
-                save_path = os.path.join(os.getcwd(), 'rt_image')
-                save_name = save_path + '/' + str(count) +'.jpg'
-                count += 1
-                cv2.imwrite(save_name, im_rd)
-            else:
-                count = 0
-            wx.CallAfter(pub.sendMessage, "Camera_data")
-            pub.subscribe(self.cancel, "camera_cancel")
+        ret, frame = self.cap.read()
+        q.put(frame)
+        while ret:
+            ret, im_rd = self.cap.read()
+            if count % 4 == 0:
+                q.put(im_rd)
 
+            count += 1
 
+            pub.subscribe(self.cancel, 'camera_cancel')
+
+    def restart(self):
+        self.timetoQuit.set()
 
     def stop(self):
-        self.timetoQuit.set()##event 为True, 调用wait的所有线程被唤醒
         self.timetoQuit.clear()
 
 
@@ -562,7 +507,7 @@ class Receive_Thread(threading.Threa):
             print()
 
 
-class Deal_Thread(threading.Thread):
+class Display_thread(threading.Thread):
     def __init__(self):
         """Init Worker Thread Class."""
         threading.Thread.__init__(self)
@@ -572,16 +517,18 @@ class Deal_Thread(threading.Thread):
         self.interface_size = (600,  480)
         self.id_embedding = 'id_embedding.txt'
 
-    def run(self):
 
+
+    def run(self):
+        ###load_data
+        lock = threading.Lock()
         font = ImageFont.truetype('NotoSansCJK-Black.ttc', 20, encoding="utf-8")
         w, h = self.interface_size[0], self.interface_size[1]
 
-        ###load_data
         fid = open(self.id_embedding, 'r')
         embeddings = fid.readlines()
         fid.close()
-        count = 0
+
 
         embed = {}
         for i in range(len(embeddings)):
@@ -592,109 +539,55 @@ class Deal_Thread(threading.Thread):
 
         feature_all = np.array(list(embed.values()))
         id = list(embed.keys())
+    ###打开摄像头
+        while 1:
+            if not q.empty():
+                # time1 = time.time()
+                image = q.get()
 
-        if not q.empty():
-            img = q.get()
-            im_rd = cv2.resize(img, (640, 640))
-            h_row, w_row = im_rd.shape[:2]
-            image = cv2.resize(im_rd, self.interface_size)
-        else:
-            time.sleep(0.0001)
-#             # try:
+                im_deal = cv2.resize(image, (640, 640))
+                image = cv2.resize(image, self.interface_size)
 
-#                 time1 = time.time()
-#                 bbox, aligned_face = model.get_input(im_rd)
-#                 time2 = time.time()
-#                 print(time2 - time1)
-#                 img_PIL = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-#                 draw = ImageDraw.Draw(img_PIL)
-#                 for i in range(len(bbox)):
-# #
-#                     name = 'unknown'
-#                     face = aligned_face[i]
-#                     feature = model.get_feature(face)
-#                     dis_list = np.mean(np.square(np.subtract(feature, feature_all)), axis=1)
-#                     min_dis = np.argmin(dis_list)
-#                     if dis_list[min_dis] < 0.01:
-#                         name = id[min_dis]
-#                         name = name.split('_')[0]
-#                     box =  bbox[i]
-#                     draw.rectangle((int(box[0]) * w / w_row, int(box[1])* h / h_row, int(box[2])* w / w_row, int(box[3])* h / h_row), None,
-#                                                    (0, 0, 255), 2)
-#                     draw.text((int(box[0])* w / w_row, int(box[1] - 10)* h / h_row), name, (55, 255, 155), font=font)
-#                     if i == 0:
-#                         max_face = im_rd[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
-#                         dis_maxface = dis_list
-#                         id_maxface = id
-#                 image_change = np.asarray(img_PIL)
-#
-# ###########发送处理好的数据给UI线程
-#                 if len(aligned_face) > 0:####画面中出现人脸
-#                     wx.CallAfter(pub.sendMessage, "Deal_data", msg=[image_change, max_face, dis_maxface, id_maxface])
-#                 else:
-        wx.CallAfter(pub.sendMessage, "Deal_data",msg=[image])
+                img_PIL = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+                draw = ImageDraw.Draw(img_PIL)
+
+                bbox, feature = model.get_input(im_deal)
+
+                for i in range(len(bbox)):
+                    name = 'unknown'
+                    dis_list = np.mean(np.square(np.subtract(feature[i], feature_all)), axis=1)
+                    min_dis = np.argmin(dis_list)
+                    if dis_list[min_dis] < 0.003:
+                        name = id[min_dis]
+                        name = name.split('_')[0]
+                    box = bbox[i]
+                    draw.rectangle((int(box[0]) * w / 640, int(box[1])* h / 640, int(box[2])* w / 640, int(box[3])* h / 640), None,
+                                                        (0, 0, 255), 2)
+                    draw.text((int(box[0])* w / 640, int(box[1] - 10)* h / 640), name, (55, 255, 155), font=font)
+
+                image_change = np.asarray(img_PIL)
+                q_deal.put(image_change)
+                wx.CallAfter(pub.sendMessage, 'Deal_data')
 
 
 
-
-#     def recognition(self, img):
-#
-# #
-#         font = ImageFont.truetype('NotoSansCJK-Black.ttc', 20, encoding="utf-8")
-# #
-#         w, h = self.interface_size[0], self.interface_size[1]
-#
-#         im_rd = cv2.resize(img, (640, 640))
-#         h_row, w_row = im_rd.shape[:2]
-#         image = cv2.resize(im_rd, self.interface_size)
-# #             # try:
-#
-#         time1 = time.time()
-#         bbox, aligned_face = model.get_input(im_rd)
-#         time2 = time.time()
-#         print(time2 - time1)
-#         img_PIL = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-#         draw = ImageDraw.Draw(img_PIL)
-#         for i in range(len(bbox)):
-# #
-#             name = 'unknown'
-#             face = aligned_face[i]
-#             feature = model.get_feature(face)
-#             dis_list = np.mean(np.square(np.subtract(feature, feature_all)), axis=1)
-#             min_dis = np.argmin(dis_list)
-#             if dis_list[min_dis] < 0.01:
-#                 name = id[min_dis]
-#                 name = name.split('_')[0]
-#             box =  bbox[i]
-#             draw.rectangle((int(box[0]) * w / w_row, int(box[1])* h / h_row, int(box[2])* w / w_row, int(box[3])* h / h_row), None,
-#                                                    (0, 0, 255), 2)
-#             draw.text((int(box[0])* w / w_row, int(box[1] - 10)* h / h_row), name, (55, 255, 155), font=font)
-#             if i == 0:
-#                 max_face = im_rd[int(box[1]):int(box[3]), int(box[0]):int(box[2])]
-#                 dis_maxface = dis_list
-#                 id_maxface = id
-#         image_change = np.asarray(img_PIL)
-# #
-# # ###########发送处理好的数据给UI线程
-#         if len(aligned_face) > 0:####画面中出现人脸
-#             wx.CallAfter(pub.sendMessage, "Deal_data", msg=[image_change, max_face, dis_maxface, id_maxface])
-#         else:
-#             wx.CallAfter(pub.sendMessage, "Deal_data",msg=[image_change])
-
+                # time2 = time.time()
+                # print(time2 - time1)
+    def restart(self):
+        self.timetoQuit.set()
 
     def stop(self):
-        self.timetoQuit.set()##event 为True, 调用wait的所有线程被唤醒
         self.timetoQuit.clear()
+
 
 
 
 class App(wx.App):
     def __init__(self, redirect=True, filename=None):
         wx.App.__init__(self, redirect, filename)
-        global model, q
+        global model
         model = self.load_model()
 
-        
     def load_model(self):
         parser = argparse.ArgumentParser(description='face model test')
         # general
@@ -724,3 +617,44 @@ if __name__ == '__main__':
 
 
 
+#
+# import threading
+#
+# def main_thread():
+#     thread_1 = sub_thread_1()
+#     thread_2 = sub_thread_2()
+#     thread_1.run()
+#     thread_2.run()
+#
+#
+#
+# class sub_thread_1():
+#     def __init__(self):
+#         """Init Worker Thread Class."""
+#         threading.Thread.__init__(self)
+#         self.timetoQuit = threading.Event()  ###创建一个日志管理标志， event默认为False
+#         self.timetoQuit.clear()   ###event标志为False, 调用wait所有的线程被阻塞
+#
+#     def run(self):
+#         while 1:
+#             print('1')
+#
+#     def stop(self):
+#         self.timetoQuit.set()
+#
+# class sub_thread_2():
+#     def __init__(self):
+#         """Init Worker Thread Class."""
+#         threading.Thread.__init__(self)
+#         self.timetoQuit = threading.Event()  ###创建一个日志管理标志， event默认为False
+#         self.timetoQuit.clear()   ###event标志为False, 调用wait所有的线程被阻塞
+#
+#     def run(self):
+#         while 1:
+#             print('2')
+#
+#     def stop(self):
+#         self.timetoQuit.set()
+#
+# if __name__ == '__main__':
+#     main_thread()
